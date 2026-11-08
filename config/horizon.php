@@ -320,45 +320,38 @@ return [
     'environments' => [
         'production' => [
             'supervisor-1' => [
+                'balance' => false,
                 'maxProcesses' => 1,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
             ],
 
             'social-publishing' => [
+                'balance' => false,
                 'maxProcesses' => 2,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
             ],
 
             'webhooks' => [
+                'balance' => false,
                 'maxProcesses' => 1,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
             ],
 
             'analytics' => [
+                'balance' => false,
                 'maxProcesses' => 1,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
             ],
 
             'media-imports' => [
+                'balance' => false,
                 'maxProcesses' => 1,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
             ],
 
             'media-adoption' => [
+                'balance' => false,
                 'maxProcesses' => 1,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
             ],
 
             'rss-feeds' => [
+                'balance' => false,
                 'maxProcesses' => 1,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
             ],
         ],
 

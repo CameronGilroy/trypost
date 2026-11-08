@@ -8,6 +8,20 @@ use App\Jobs\Media\ImportRemoteMedia;
 use App\Jobs\RssFeed\FetchRssFeed;
 use App\Jobs\RssFeed\FetchRssFeedItemImage;
 
+test('production horizon supervisors stay on a fixed process cap', function () {
+    $production = config('horizon.environments.production');
+
+    expect($production)->not->toBeEmpty()
+        ->and(collect($production)->every(
+            fn (array $supervisor): bool => ($supervisor['balance'] ?? null) === false
+                && ($supervisor['maxProcesses'] ?? 99) <= 2
+        ))->toBeTrue();
+
+    $workers = collect($production)->sum('maxProcesses');
+
+    expect($workers)->toBeLessThanOrEqual(8);
+});
+
 test('no horizon supervisor works the ai queue', function () {
     $queues = collect(config('horizon.defaults'))
         ->flatMap(fn (array $supervisor): array => (array) data_get($supervisor, 'queue', []))
@@ -76,6 +90,7 @@ test('the library adoption is worked only by its own supervisor, which outlives 
     expect(config('horizon.defaults.media-adoption.queue'))->toBe([AdoptWorkspaceLibraryJob::QUEUE])
         ->and($others)->not->toContain(AdoptWorkspaceLibraryJob::QUEUE)
         ->and(config('horizon.defaults.media-adoption.timeout'))->toBeGreaterThan((new ReflectionClass(AdoptWorkspaceLibraryJob::class))->getProperty('timeout')->getDefaultValue())
-        ->and(config('horizon.environments.production.media-adoption.maxProcesses'))->toBe(20)
+        ->and(config('horizon.environments.production.media-adoption.maxProcesses'))->toBe(1)
+        ->and(config('horizon.environments.production.media-adoption.balance'))->toBeFalse()
         ->and(config('horizon.environments.local.media-adoption'))->toBeArray();
 });
