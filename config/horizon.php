@@ -185,7 +185,7 @@ return [
     |
     */
 
-    'fast_termination' => false,
+    'fast_termination' => true,
 
     /*
     |--------------------------------------------------------------------------
@@ -320,43 +320,43 @@ return [
     'environments' => [
         'production' => [
             'supervisor-1' => [
-                'maxProcesses' => 10,
+                'maxProcesses' => 1,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
 
             'social-publishing' => [
-                'maxProcesses' => 10,
+                'maxProcesses' => 2,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
 
             'webhooks' => [
-                'maxProcesses' => 3,
+                'maxProcesses' => 1,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
 
             'analytics' => [
-                'maxProcesses' => 4,
+                'maxProcesses' => 1,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
 
             'media-imports' => [
-                'maxProcesses' => 4,
+                'maxProcesses' => 1,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
 
             'media-adoption' => [
-                'maxProcesses' => (int) env('HORIZON_MEDIA_ADOPTION_PROCESSES', 20),
-                'balanceMaxShift' => 5,
-                'balanceCooldown' => 1,
+                'maxProcesses' => 1,
+                'balanceMaxShift' => 1,
+                'balanceCooldown' => 3,
             ],
 
             'rss-feeds' => [
-                'maxProcesses' => 3,
+                'maxProcesses' => 1,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
