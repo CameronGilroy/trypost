@@ -387,7 +387,7 @@ Route::middleware(['auth', EnsureAccountReady::class, EnsureHasWorkspace::class]
     Route::get('settings/workspace/mcp', [McpSettingsController::class, 'index'])->name('app.mcp.index');
     Route::delete('settings/workspace/mcp/{client}', [McpSettingsController::class, 'disconnect'])->name('app.mcp.disconnect');
     Route::get('settings/workspace/mcp/prompt', [McpPromptController::class, 'show'])
-        ->middleware('throttle:60,1')
+        ->middleware('throttle:60,1,mcp-prompt')
         ->name('app.mcp.prompt.show');
     Route::post('settings/workspace/mcp/prompt', [McpPromptController::class, 'store'])
         ->middleware('throttle:30,1')
@@ -434,7 +434,7 @@ Route::middleware(['auth'])->group(function () {
     Route::delete('settings/profile', [ProfileController::class, 'destroy'])->name('app.profile.destroy');
 
     Route::put('settings/profile/password', [PasswordController::class, 'update'])
-        ->middleware('throttle:6,1')
+        ->middleware('throttle:6,1,password')
         ->name('app.profile.password.update');
     Route::delete('settings/profile/sessions', [SessionController::class, 'destroyOthers'])
         ->name('app.profile.sessions.destroy-others');
