@@ -1,5 +1,8 @@
 import type { RecurrenceFrequency } from '@/lib/recurrence';
-import type { PublicationAnalyticsDetail } from '@/types/analytics';
+import type {
+    MetricsUnavailableReason,
+    PublicationAnalyticsDetail,
+} from '@/types/analytics';
 import type { MediaItem } from '@/types/media';
 import type { PlatformValue } from '@/types/platform';
 import type {
@@ -15,6 +18,11 @@ import type { SocialAccountStatusValue } from '@/types/social-account-status';
 export type PublishTab = 'queue' | 'approvals' | 'drafts' | 'sent';
 
 export type PublishScope = 'all' | 'channel';
+
+/** The ways the Publish page shows posts; the Instagram grid is not one of them. */
+export const PUBLISH_VIEWS = ['list', 'calendar', 'board'] as const;
+
+export type PublishView = (typeof PUBLISH_VIEWS)[number];
 
 export type PublishCounts = Record<PublishTab, number>;
 
@@ -48,7 +56,7 @@ export interface PostCardLabel {
 
 export interface UnavailablePostMetrics {
     available: false;
-    reason: string | null;
+    reason: MetricsUnavailableReason;
 }
 
 export type PostCardMetrics = PublicationAnalyticsDetail | UnavailablePostMetrics;
@@ -108,6 +116,7 @@ export interface QueueDay {
 }
 
 export interface QueuePostPosition {
+    canMoveToTop: boolean;
     canMoveUp: boolean;
     canMoveDown: boolean;
 }
@@ -127,6 +136,7 @@ export interface QueueView {
 
 export interface ScrollPostCards {
     data: PostCard[];
+    total: number;
 }
 
 export type PostCardMove = 'top' | 'up' | 'down';

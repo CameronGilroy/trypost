@@ -20,7 +20,7 @@ import PostDetailsMedia from '@/components/publish/PostDetailsMedia.vue';
 import PostMetricsBand from '@/components/publish/PostMetricsBand.vue';
 import PostPollResults from '@/components/publish/PostPollResults.vue';
 import PostPollResultsList from '@/components/publish/PostPollResultsList.vue';
-import { Badge } from '@/components/ui/badge';
+import PostStatusBadge from '@/components/publish/PostStatusBadge.vue';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -35,19 +35,26 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import {
     getPlatformLabel,
 } from '@/composables/usePlatformLogo';
-import { schedulePostCard } from '@/composables/usePostCardActions';
-import { getPostStatusConfig } from '@/composables/usePostStatus';
+import {
+    schedulePostCard,
+    usePageReload,
+} from '@/composables/usePostCardActions';
+import {
+    getPostStatusConfig,
+    postDisplayStatus,
+} from '@/composables/usePostStatus';
 import { useWorkspaceAbilities } from '@/composables/useWorkspaceAbilities';
 import date from '@/date';
 import dayjs from '@/dayjs';
 import { filled } from '@/lib/helpers';
+import { isDeletedOnNetwork, postPermalink } from '@/lib/postNetwork';
 import { postThreadOf } from '@/lib/postThread';
 import { compactPublicationMetrics } from '@/lib/publicationMetrics';
 import { isRecurring } from '@/lib/recurrence';
 import { postPollResults } from '@/lib/xPoll';
 import type { MediaItem } from '@/types/media';
 import { Platform } from '@/types/platform';
-import { PostOrigin, PostStatus, PublishStatus } from '@/types/post';
+import { PostOrigin, PostStatus } from '@/types/post';
 import type { PostCard, PostCardMenuAction } from '@/types/publish';
 
 const props = defineProps<{
@@ -120,19 +127,24 @@ const current = computed<PostCard>(() =>
           props.post),
 );
 
-const isInGoogleReview = computed(
-    () =>
-        current.value.status === PostStatus.Publishing &&
-        current.value.publish_status === PublishStatus.PendingReview,
-);
+const currentStatus = computed(() => postDisplayStatus(current.value));
 
-const currentStatusConfig = computed(() =>
-    getPostStatusConfig(
-        isInGoogleReview.value
-            ? PublishStatus.PendingReview
-            : current.value.status,
+/** Each sibling's status in the rail; a post the network deleted reads as deleted. */
+const railStatuses = computed(() =>
+    Object.fromEntries(
+        siblings.value.map((sibling) => [
+            sibling.id,
+            getPostStatusConfig(postDisplayStatus(sibling)),
+        ]),
     ),
 );
+
+const pageReload = usePageReload();
+
+/** Publishing from the details reloads what the page asks for (the board's columns), like the card's menu. */
+const publishCurrentNow = (): void => {
+    schedulePostCard(current.value.id, 'publish_now', pageReload());
+};
 
 const currentKey = computed(() =>
     current.value.id === props.post.id ? props.testKey : current.value.id,
@@ -147,7 +159,7 @@ const channel = computed(() =>
         : null,
 );
 
-const permalink = computed(() => current.value.platform_url ?? null);
+const permalink = computed(() => postPermalink(current.value));
 
 const metricsDetail = computed(() => {
     const detail = current.value.metrics ?? null;
@@ -305,10 +317,11 @@ const siblingMoment = (sibling: PostCard): string | null => {
                                 :data-status="sibling.status"
                             >
                                 <component
-                                    :is="getPostStatusConfig(sibling.status).icon"
-                                    :class="getPostStatusConfig(sibling.status).iconClass"
+                                    :is="railStatuses[sibling.id].icon"
+                                    :class="railStatuses[sibling.id].iconClass"
                                     class="size-3.5 shrink-0"
-                                    :aria-label="$t(`posts.status.${sibling.status}`)"
+                                    :aria-label="$t(railStatuses[sibling.id].labelKey)"
+                                    :data-testid="`post-details-rail-status-icon-${sibling.id}`"
                                 />
                                 {{
                                     siblingMoment(sibling) ??
@@ -338,21 +351,16 @@ const siblingMoment = (sibling: PostCard): string | null => {
                             class="flex flex-wrap items-center gap-2"
                             as="div"
                         >
-                            <Badge
-                                :variant="currentStatusConfig.variant"
-                                class="h-6 gap-1 px-2 [&>svg]:size-4"
+                            <PostStatusBadge
+                                v-if="isDeletedOnNetwork(current)"
+                                status="deleted_on_network"
+                                :data-testid="`post-details-deleted-on-network-${testKey}`"
+                            />
+                            <PostStatusBadge
+                                v-else
+                                :status="currentStatus"
                                 :data-testid="`post-details-status-${testKey}`"
-                            >
-                                <component
-                                    :is="currentStatusConfig.icon"
-                                    :class="currentStatusConfig.iconClass"
-                                />
-                                {{
-                                    isInGoogleReview
-                                        ? $t('posts.publish.in_google_review')
-                                        : $t(`posts.status.${current.status}`)
-                                }}
-                            </Badge>
+                            />
                             <span
                                 class="text-sm text-muted-foreground"
                                 :data-testid="`post-details-time-${testKey}`"
@@ -562,7 +570,7 @@ const siblingMoment = (sibling: PostCard): string | null => {
                                 "
                                 variant="outline"
                                 :data-testid="`post-details-publish-now-${currentKey}`"
-                                @click="schedulePostCard(current.id, 'publish_now')"
+                                @click="publishCurrentNow"
                             >
                                 <IconSend class="size-4" />
                                 {{ $t('posts.publish.actions.publish_now') }}

@@ -23,6 +23,7 @@ use App\Models\Offer;
 use App\Models\Plan;
 use App\Models\Post;
 use App\Models\PostNote;
+use App\Models\PostNoteReaction;
 use App\Models\PostTemplate;
 use App\Models\Repurpose;
 use App\Models\RepurposeItem;
@@ -60,7 +61,7 @@ use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
 use Laravel\Cashier\Cashier;
 use Laravel\Nightwatch\Facades\Nightwatch;
-use Laravel\Nightwatch\Records\CacheEvent;
+use Laravel\Nightwatch\Records\Query;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\GoogleProvider;
 use PostHog\PostHog;
@@ -91,6 +92,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->configureDefaults();
         $this->configureMorphMap();
+        $this->configureNightwatch();
         $this->configurePostHog();
         $this->configureRateLimiting();
         $this->configureSocialite();
@@ -99,6 +101,23 @@ class AppServiceProvider extends ServiceProvider
         Cashier::useSubscriptionModel(Subscription::class);
         Cashier::useSubscriptionItemModel(SubscriptionItem::class);
         Cashier::keepPastDueSubscriptionsActive();
+    }
+
+    /**
+     * Jobs, commands and scheduled tasks send only their slow queries: the queue
+     * runs millions of fast ones a month, and each would count as an event. Web
+     * requests keep every query, since they are already sampled.
+     */
+    protected function configureNightwatch(): void
+    {
+        if (! config('nightwatch.enabled')) {
+            return;
+        }
+
+        $slowQueryMicroseconds = config('nightwatch.filtering.slow_query_ms') * 1000;
+
+        Nightwatch::rejectQueries(fn (Query $query): bool => $this->app->runningInConsole()
+            && $query->duration < $slowQueryMicroseconds);
     }
 
     protected function configureMorphMap(): void
@@ -127,6 +146,7 @@ class AppServiceProvider extends ServiceProvider
             'rssFeedCollection' => RssFeedCollection::class,
             'rssFeedItem' => RssFeedItem::class,
             'postComment' => PostNote::class,
+            'postNoteReaction' => PostNoteReaction::class,
             'postTemplate' => PostTemplate::class,
             'socialAccount' => SocialAccount::class,
             'subscription' => Subscription::class,
@@ -277,14 +297,6 @@ class AppServiceProvider extends ServiceProvider
         );
 
         Password::defaults(fn (): Password => PasswordRequirements::rule());
-
-        Nightwatch::rejectCacheEvents(function (CacheEvent $cacheEvent) {
-            return in_array($cacheEvent->key, [
-                'illuminate:foundation:down',
-                'illuminate:queue:restart',
-                'illuminate:schedule:interrupt',
-            ]);
-        });
 
         // Custom email verification template
         VerifyEmail::toMailUsing(function (User $user, string $url) {

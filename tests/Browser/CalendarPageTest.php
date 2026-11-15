@@ -416,6 +416,33 @@ test('a calendar opened by its link asks for its posting times only once its pag
         ->assertNoJavaScriptErrors();
 });
 
+test('in the month a post the network deleted shows the deleted mark instead of the published one', function () {
+    [$user, $linkedin] = calendarPageSetup();
+    $day = now('UTC')->subMonthNoOverflow()->startOfMonth()->addDays(14);
+    $published = Post::factory()->forAccount($linkedin)->published()->create([
+        'user_id' => $user->id,
+        'scheduled_at' => $day->setTime(10, 0),
+        'published_at' => $day->setTime(10, 0),
+    ]);
+    $deleted = Post::factory()->forAccount($linkedin)->deletedOnNetwork()->create([
+        'user_id' => $user->id,
+        'scheduled_at' => $day->setTime(12, 0),
+        'published_at' => $day->setTime(12, 0),
+    ]);
+
+    $this->actingAs($user);
+
+    $page = visit(route('app.calendar', ['view' => 'month', 'month' => $day->format('Y-m-d')]))->resize(1440, 900);
+    waitFor($page, "@calendar-post-{$deleted->id}");
+
+    $page->assertPresent("@calendar-post-deleted-{$deleted->id}")
+        ->assertMissing("@calendar-post-published-{$deleted->id}")
+        ->assertAttribute("@calendar-post-deleted-{$deleted->id}", 'aria-label', __('calendar.post_status.deleted'))
+        ->assertPresent("@calendar-post-published-{$published->id}")
+        ->assertMissing("@calendar-post-deleted-{$published->id}")
+        ->assertNoJavaScriptErrors();
+});
+
 test('in the month a post shows its network in color and a status icon with a tooltip, and a free posting time reads as a hatched empty slot', function () {
     [$user, $linkedin] = calendarPageSetup();
     $schedule = PostingSchedule::empty();
@@ -630,6 +657,8 @@ test('a details action reloads the calendar and the details show the new status'
 
     expect($post->refresh()->status)->toBe(PostStatus::Draft);
 
+    waitForGone($page, "@post-card-menu-content-details-{$post->id}");
+    waitForOpen($page, "@post-details-{$post->id}");
     $page->keys("@post-details-{$post->id}", 'Escape');
     waitForGone($page, "@post-details-{$post->id}");
     $page->assertVisible("@calendar-post-{$post->id}")
@@ -697,7 +726,9 @@ test('on a phone the calendar tab of the view switch keeps the three days view, 
     $calendarTabPath = 'new URL(document.querySelector(\'[data-testid="schedule-view-calendar"]\').href).pathname';
 
     $page = visit(route('app.calendar', ['view' => 'days']))->resize(390, 844);
-    waitFor($page, '@schedule-view-calendar');
+    waitFor($page, '@schedule-view-trigger');
+    $page->click('@schedule-view-trigger');
+    waitForOpen($page, '@schedule-view-menu');
     $page->assertScript($calendarTabPath, route('app.calendar', ['view' => 'days'], false))
         ->click('@schedule-view-calendar');
     waitFor($page, '@calendar-time-grid');

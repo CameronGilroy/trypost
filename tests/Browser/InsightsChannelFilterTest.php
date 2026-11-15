@@ -3,14 +3,17 @@
 declare(strict_types=1);
 
 use App\Enums\SocialAccount\Platform;
+use App\Enums\User\Locale;
 use App\Jobs\Analytics\BootstrapAccountAnalytics;
 use App\Jobs\Analytics\CollectAccountDailySnapshot;
 use App\Models\AnalyticsAccountDailySnapshot;
 use App\Models\AnalyticsPublication;
 use App\Models\AnalyticsPublicationDailySnapshot;
+use App\Models\Post;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Models\WorkspaceLabel;
 use Illuminate\Support\Facades\Queue;
 
 /** @return array{0: User, 1: list<SocialAccount>} */
@@ -75,14 +78,7 @@ test('the channel filter scopes the dashboard and keeps the channel in the url',
         ->click('@analytics-channel-filter');
     waitFor($page, "@analytics-channel-checkbox-{$alpha->id}");
     $page->click("@analytics-channel-checkbox-{$alpha->id}");
-    $page->script(<<<'JS'
-        (async () => {
-            for (let attempt = 0; attempt < 100; attempt++) {
-                if ([...new URLSearchParams(location.search).keys()].filter((key) => key.startsWith('channels')).length === 1) return;
-                await new Promise((resolve) => setTimeout(resolve, 100));
-            }
-        })();
-    JS);
+    waitForCondition($page, "[...new URLSearchParams(location.search).keys()].filter((key) => key.startsWith('channels')).length === 1");
     waitFor($page, '@insights-card-followers');
 
     $page->assertScript('[...new URLSearchParams(location.search)].filter(([key]) => key.startsWith("channels")).map(([, value]) => value)', [$alpha->id])
@@ -91,14 +87,7 @@ test('the channel filter scopes the dashboard and keeps the channel in the url',
         ->assertNoJavaScriptErrors();
 
     $page->click('@insights-range-7d');
-    $page->script(<<<'JS'
-        (async () => {
-            for (let attempt = 0; attempt < 100; attempt++) {
-                if (new URLSearchParams(location.search).get('range') === '7d') return;
-                await new Promise((resolve) => setTimeout(resolve, 100));
-            }
-        })();
-    JS);
+    waitForQueryParameter($page, 'range', '7d');
 
     $page->assertScript('[...new URLSearchParams(location.search)].filter(([key]) => key.startsWith("channels")).map(([, value]) => value)', [$alpha->id])
         ->assertNoJavaScriptErrors();
@@ -169,10 +158,10 @@ test('the follower bar tooltip lists where the channel started and the toolbar f
         ->assertNoJavaScriptErrors();
 
     $page->resize(390, 844);
-    waitFor($page, '@insights-range-custom');
+    waitFor($page, '@insights-range-mobile-trigger');
 
-    $page->assertScript('(() => { const group = document.querySelector("[data-testid=insights-range-presets] [role=group]"); return group.scrollWidth <= group.clientWidth + 1; })()', true)
-        ->assertScript('document.querySelector("[data-testid=insights-range-custom]").getBoundingClientRect().right <= window.innerWidth', true)
+    $page->assertMissing('@insights-range-custom')
+        ->assertScript('document.querySelector("[data-testid=insights-range-mobile-trigger]").getBoundingClientRect().right <= window.innerWidth', true)
         ->assertScript('document.querySelector("[data-testid=analytics-channel-filter]").getBoundingClientRect().right <= window.innerWidth', true)
         ->assertScript('document.documentElement.scrollWidth <= window.innerWidth + 2', true)
         ->assertScript('Array.from(document.querySelectorAll("[data-testid=analytics-account-name]")).every((name) => name.offsetParent === null)', true)
@@ -195,14 +184,7 @@ test('a channel without data shows the filtered empty state and history navigati
     $page = visit(route('app.insights'));
     waitFor($page, '@insights-range-7d');
     $page->click('@insights-range-7d');
-    $page->script(<<<'JS'
-        (async () => {
-            for (let attempt = 0; attempt < 100; attempt++) {
-                if (new URLSearchParams(location.search).get('range') === '7d') return;
-                await new Promise((resolve) => setTimeout(resolve, 100));
-            }
-        })();
-    JS);
+    waitForQueryParameter($page, 'range', '7d');
     waitFor($page, '@analytics-channel-filter');
     $page->click('@analytics-channel-filter');
     waitFor($page, "@analytics-channel-checkbox-{$silent->id}");
@@ -215,14 +197,7 @@ test('a channel without data shows the filtered empty state and history navigati
         ->assertScript('new URLSearchParams(location.search).get("range")', '7d');
 
     $page->script('history.back()');
-    $page->script(<<<'JS'
-        (async () => {
-            for (let attempt = 0; attempt < 100; attempt++) {
-                if (location.pathname.endsWith('/insights') && !location.search.includes('range=7d')) return;
-                await new Promise((resolve) => setTimeout(resolve, 100));
-            }
-        })();
-    JS);
+    waitForCondition($page, "location.pathname.endsWith('/insights') && !location.search.includes('range=7d')");
     waitFor($page, '@analytics-summary-followers');
 
     $page->assertScript('location.pathname.endsWith("/insights") && !location.search.includes("channels")', true)
@@ -362,5 +337,149 @@ test('on a touch screen a tap on a line’s label, which never leaves it, fades 
 
     expect($page->script('window.matchMedia("(hover: hover)").matches'))->toBeFalse()
         ->and($dimmed)->toBe(0);
+    $page->assertNoJavaScriptErrors();
+});
+
+test('a follower change of a thousand or more reads short and signed, the same in every language', function () {
+    [$user, [$alpha]] = insightsChannelFilterFixture();
+    $user->update(['locale' => Locale::PortugueseBrazil]);
+    AnalyticsAccountDailySnapshot::query()
+        ->where('social_account_id', $alpha->id)
+        ->where('followers_count', 120)
+        ->update(['followers_count' => 1300]);
+    $this->actingAs($user);
+
+    $page = visit(route('app.insights'));
+    waitFor($page, '@analytics-followers-change');
+
+    $page->assertSeeIn('@analytics-followers-change', '+1.2K')
+        ->assertNoJavaScriptErrors();
+});
+
+test('picking a label narrows the post metrics and keeps the label in the url', function () {
+    [$user, [$alpha]] = insightsChannelFilterFixture();
+    $label = WorkspaceLabel::factory()->create(['workspace_id' => $alpha->workspace_id, 'name' => 'Launch']);
+    $post = Post::factory()->forAccount($alpha)->published()->create(['user_id' => $user->id]);
+    $post->labels()->attach($label);
+    AnalyticsPublication::query()->where('social_account_id', $alpha->id)->update(['post_id' => $post->id]);
+    $this->actingAs($user);
+
+    $page = visit(route('app.insights'));
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '2'");
+
+    $page->click('@analytics-label-filter');
+    waitFor($page, "@analytics-label-checkbox-{$label->id}");
+    $page->click("@analytics-label-checkbox-{$label->id}");
+    waitForCondition($page, "[...new URLSearchParams(location.search)].some(([key, value]) => key.startsWith('labels') && value === '{$label->id}')");
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '1'");
+
+    $page->assertNoJavaScriptErrors();
+});
+
+test('picking untagged counts only the posts without a label and clearing the filter brings every post back', function () {
+    [$user, [$alpha]] = insightsChannelFilterFixture();
+    $label = WorkspaceLabel::factory()->create(['workspace_id' => $alpha->workspace_id]);
+    $post = Post::factory()->forAccount($alpha)->published()->create(['user_id' => $user->id]);
+    $post->labels()->attach($label);
+    AnalyticsPublication::query()->where('social_account_id', $alpha->id)->update(['post_id' => $post->id]);
+    $this->actingAs($user);
+
+    $page = visit(route('app.insights'));
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '2'");
+
+    $page->click('@analytics-label-filter');
+    waitFor($page, '@analytics-label-untagged-checkbox');
+    $page->click('@analytics-label-untagged-checkbox');
+    waitForCondition($page, "new URLSearchParams(location.search).get('untagged') === '1'");
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '1'");
+
+    $page->click('@analytics-label-clear');
+    waitForCondition($page, "!new URLSearchParams(location.search).has('untagged')");
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '2'");
+
+    $page->assertNoJavaScriptErrors();
+});
+
+function insightsLabelledFixture(): array
+{
+    [$user, [$alpha]] = insightsChannelFilterFixture();
+    $label = WorkspaceLabel::factory()->create(['workspace_id' => $alpha->workspace_id]);
+    $post = Post::factory()->forAccount($alpha)->published()->create(['user_id' => $user->id]);
+    $post->labels()->attach($label);
+    AnalyticsPublication::query()->where('social_account_id', $alpha->id)->update(['post_id' => $post->id]);
+
+    return [$user, $label];
+}
+
+function pickInsightsLabel(mixed $page, WorkspaceLabel $label): void
+{
+    $page->click('@analytics-label-filter');
+    waitFor($page, "@analytics-label-checkbox-{$label->id}");
+    $page->click("@analytics-label-checkbox-{$label->id}");
+    waitForCondition($page, "[...new URLSearchParams(location.search)].some(([key, value]) => key.startsWith('labels') && value === '{$label->id}')");
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '1'");
+    $page->keys("@analytics-label-checkbox-{$label->id}", 'Escape');
+    waitForGone($page, "@analytics-label-checkbox-{$label->id}");
+}
+
+test('a picked label stays through a range change and goes into the export links', function () {
+    [$user, $label] = insightsLabelledFixture();
+    $this->actingAs($user);
+
+    $page = visit(route('app.insights'));
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '2'");
+    pickInsightsLabel($page, $label);
+
+    $page->click('@insights-range-7d');
+    waitForQueryParameter($page, 'range', '7d');
+    waitForCondition($page, "[...new URLSearchParams(location.search)].some(([key, value]) => key.startsWith('labels') && value === '{$label->id}')");
+
+    $page->click('@insights-export');
+    waitFor($page, '@insights-export-csv');
+    expect(urldecode((string) $page->script('document.querySelector("[data-testid=insights-export-csv]").href')))
+        ->toContain($label->id)
+        ->toContain('range=7d');
+    $page->assertNoJavaScriptErrors();
+});
+
+test('history back re-syncs the label filter of the workspace insights with the page', function () {
+    [$user, $label] = insightsLabelledFixture();
+    $this->actingAs($user);
+
+    $page = visit(route('app.insights'));
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '2'");
+
+    $page->click('@insights-range-7d');
+    waitForQueryParameter($page, 'range', '7d');
+    pickInsightsLabel($page, $label);
+
+    $page->script('history.back()');
+    waitForCondition($page, "!location.search.includes('range=7d') && !location.search.includes('labels')");
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '2'");
+
+    $page->click('@analytics-label-filter');
+    waitFor($page, "@analytics-label-checkbox-{$label->id}");
+    $page->assertAttribute("@analytics-label-checkbox-{$label->id}", 'data-state', 'unchecked')
+        ->assertNoJavaScriptErrors();
+});
+
+test('a deleted label in the url keeps the workspace insights open and matches no post', function () {
+    [$user, $label] = insightsLabelledFixture();
+    $label->delete();
+    $this->actingAs($user);
+
+    $page = visit(route('app.insights', ['labels' => [$label->id]]));
+    waitFor($page, '@analytics-label-filter');
+
+    $page->assertPathIs(route('app.insights', absolute: false))
+        ->assertNoJavaScriptErrors();
+    expect($page->script('location.search'))->toContain($label->id);
+
+    $page->click('@analytics-label-filter');
+    waitFor($page, '@analytics-label-clear');
+    $page->click('@analytics-label-clear');
+    waitForCondition($page, "!location.search.includes('labels')");
+    waitForState($page, '@analytics-summary-posts .font-heading', "element.textContent.trim() === '2'");
+
     $page->assertNoJavaScriptErrors();
 });

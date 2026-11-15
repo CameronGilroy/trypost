@@ -203,6 +203,24 @@ Vue components must have a single root element.
 
 # Project-Specific Rules
 
+## Branching reads top to bottom (PHP and TypeScript)
+
+A function that decides between several outcomes is a list of early returns, one case per `if`, read from top to bottom (owner decision November 2026). Never a ternary inside a ternary, a ternary inside an `if`, or a ternary whose condition joins several checks with `||` / `&&`.
+
+- One ternary with a single plain condition is fine (`filled($channel) ? 'channel' : 'all'`). Anything more becomes `if` blocks with braces.
+- Name a check used twice (`const imported = post.origin === PostOrigin.Network`) instead of repeating it in each branch.
+- When the outcome follows from what the user clicked, let each action say it (`publishNow()` toasts "publishing") instead of guessing it back from the payload.
+- A `match` lists every case it accepts and has no `default` that hides an unknown value; an unknown value should fail, not read as another case.
+- Code written before this rule moves to it when touched, not in a sweep. `PostTimelineCard`'s `scheduleMode` is the reference.
+
+### On the frontend, never inline a decision (owner decision November 2026)
+
+- **A function or computed that decides is a block with `if`s, never a one-expression body.** No `(x) => a ? b : c`, no `a || b ? … : …`, no `x === A || x === B` returned as a boolean, no `?.` / `??` chain that picks between several sources. Write each case as its own `if` with braces and an early return, as `postAttemptAt()`, `postChannelLabel()` and `accountTypeKey()` (`lib/postCard.ts`, `types/social-account.ts`) do.
+- **A set of values checked together is a named constant**, read with `.includes()` inside an `if` (`CONNECTION_LOST_STATUSES`, `PLATFORMS_WITH_ACCOUNT_TYPE`), not a chain of `===` joined by `||`.
+- **Templates hold no logic.** No ternary, `||` / `??` fallback, `.join()`, arithmetic or comparison inside `{{ }}`, `:class`, `:title`, `:aria-label` or a `v-if`: the template calls a named computed (`hasPostingTimes`, `textColor`) or a named function (`openLabel($t)`, `networkLine($t)`). A fallback that needs a translation is a function that takes the template's `$t` (see `.ai/rules/js.md`: never `trans()` in a script-level computed).
+- **A simple value is not a decision:** a plain read (`post.id`), a single `filled(x)` / `!isPending` in a `v-if`, and a `v-if` / `v-else` pair that swaps two elements stay as they are. Everything else gets a name.
+- `ChannelListItem.vue`, `PostBoardCard.vue` and `ApprovePostButton.vue` are the references.
+
 ## Frontend (Vue/TypeScript)
 
 - **TypeScript only, never JavaScript** (owner decision November 2026). Every script, config and test harness is a `.ts` file: `eslint.config.ts`, `vite.config.ts`, the Node harnesses in `tests/fixtures/*-harness.ts` (Node strips the types when it runs them, so they need no build step). Never add a `.js` or `.mjs` file. The one exception is the Maizzle email project (`maizzle/*.js`), which keeps its own JavaScript config.
@@ -212,9 +230,10 @@ Vue components must have a single root element.
 - **A button that waits on a request shows it through the `Button` component's own `loading` prop whenever possible** (`<Button :loading="form.processing">`): it disables the button and swaps its label for the spinner, so every button waits the same way. Do not hand-roll a `<Spinner v-if>` inside the label or a separate disabled flag for this. When `loading` cannot fit (the label must stay visible next to the spinner, an `as-child` link, a control that is not our `Button`), keep the label and add the spinner next to it. Many existing buttons predate this rule; move them to `loading` when touching them, not in a sweep.
 - **Unsaved changes in the composer** go through `composables/composer/useUnsavedChanges.ts` (the history guard) and `useComposerUnsavedChanges.ts` (what counts as a change). The owner treats this guard as critical. How the guard works is written in the composable's docblock; three rules hold around it:
     - The composer's save visits (`router.put` / `router.post` in `pages/publish/Index.vue`) send `replace: true`, so the saved page takes the place of the edit's history entry instead of stacking on it.
-    - A composer opened from a page of the app (`lib/inAppHistory.ts`, `cameFromAppPage()`) leaves through history: closing goes back, and saving goes back once the saved page lands and reloads that page. So after a save or close, one browser Back reaches the page before the list, calendar or tab it was opened from. A composer reached by its link or a reload has nothing behind it and still replaces its entry with the list.
+    - A composer opened from a page of the app (`lib/inAppHistory.ts`, `cameFromAppPage()`) leaves through history: closing goes back, and saving goes back once the saved page lands and reloads that page. So after a save or close, one browser Back reaches the page before the list, calendar or tab it was opened from. A composer reached by its link or a reload has nothing behind it and still replaces its entry with the list. Duplicating a post (a POST that lands on the copy's composer) counts as opened from the page it was duplicated from (`rememberInAppPush()`), so closing the copy goes back to that List, Calendar or Board.
     - "Is there unsaved work" is decided by the snapshot comparison alone, never by `isSubmitting` or another request flag.
     - Every change to the guard ships with a browser test in `tests/Browser/ComposerUnsavedChangesTest.php` that fails without it, checked by removing the change and running the test. History bugs here showed up only in a real browser (Inertia's own popstate handler is part of every flow).
+- **A post's status badge is always `PostStatusBadge`** (`components/publish/PostStatusBadge.vue`, owner decision November 2026). Never build one by hand from `<Badge>`, an icon and `posts.status.*`. It takes two props only: `status`, the status to show (a `PostDisplayStatus`: the post's status, or `pending_review` / `deleted_on_network`; read a post's with `postDisplayStatus(post)` from `composables/usePostStatus.ts`), and `compact`, the smaller badge of a dense card (the board), which changes the size only, never the text. Color and icon come from `getPostStatusConfig()` in `usePostStatus.ts`, the label from `posts.status.<status>`: one short label per status, the same at both sizes and in every place it shows (no long and short variants, no per-screen override). A new status adds its row there and its key in the 16 locales and in `tests/fixtures/single-line-copy.php`. The calendar chip's icon-only marker (`CalendarPostChip`, `calendar.post_status.*` in its tooltip) is a separate thing and stays as it is.
 - **Composables are scoped by area.** A composable used by one area only lives in that area's folder, `resources/js/composables/<area>/` (e.g. `composables/composer/useComposerUnsavedChanges.ts`, `composables/echo/usePostEcho.ts`). Only composables shared across areas stay at the root of `resources/js/composables/`. When a scoped composable gains a consumer in another area, move it to the root in the same change.
 - Searching a list in the UI goes through `matchesSearch` / `filterBySearch` (`resources/js/lib/search.ts`): word by word, ignoring case and accents. Never hand-roll `.toLowerCase().includes(...)` for a search box.
 - **Value checks go through `@/lib/helpers`** (owner decision November 2026), the front-end mirror of Laravel's helpers, so a check reads the same on both sides: `blank()` / `filled()` for emptiness, `isEmpty()` (Laravel's `isEmpty()` on a string or a collection) when spaces count, instead of `=== ''` or `.length === 0`, `isString()` / `isNumber()` instead of `typeof x === 'string'`, `transform(value, callback, fallback)` instead of `value ? callback(value) : fallback`, and `clamp()` (Laravel's `Number::clamp`) instead of `Math.min(Math.max(...))`. Emptiness reads `filled(reply.media)`, not `reply.media.length > 0`; `filled(limits)`, not `limits !== null`. Every helper follows its PHP twin, kept equal by `tests/Unit/HelpersParityTest.php`: null, undefined, a whitespace-only string and an empty array or plain object are blank; numbers and booleans (zero and false included) never are. `filled()` narrows the type, so after `if (filled(reply))` the value is no longer null or undefined. Keep an exact `=== undefined` where an empty object is a real value (a poll or meta that may be `{}`), since `blank({})` is true. A new helper (Laravel's `transform`, `value`, …) goes in the same file with a case in the parity test. Existing hand-written checks move to the helpers when touched, not in a sweep.
@@ -884,7 +903,8 @@ view turns a forgotten variable into a runtime-only failure.
     - **Exception — the per-post table on the channel insights page** (owner decision 2026-10-05): it is page-based with numbered pages, 10 posts per page (`ListChannelPublicationPerformance::INSIGHTS_PAGE_SIZE`, through `insightsPage()`), and keeps `?page=` in the URL; a sort, period or filter change goes back to page 1. The API endpoint and the MCP tool for the same list keep the config page size through `handle()`.
     - **Exception — the ideas board columns** (owner decision 2026-10-06): each stage column (and Unassigned) is its own scroll prop, `columns.<stage id|unassigned>`, with its own page name, and loads 10 ideas per page (`ListIdeas::BOARD_PAGE_SIZE`) as the column scrolls. A label filter change resets every column to page 1. Column counts come from the database (`stages.*.ideas_count`, `unassigned_count`), never from the loaded cards. The web board moves a card with `after_idea_id` (`MoveIdea::after()`), since a partly loaded column cannot send the full order; the API and MCP keep the full `idea_ids` contract. The gallery keeps the config page size.
     - **Exception — the "What's New" modal** (owner decision 2026-10-14): it loads 5 entries per page, enough to fill the modal (capped at 640px) and the next one loads only when the user scrolls (`ListChangelogEntries::PAGE_SIZE`) under the page name `changelog_page`, as the shared optional scroll prop `changelogEntries` (built with the `changelog` card prop by `BuildChangelogProps`, which `HandleInertiaRequests` only spreads), requested by a partial reload when the modal opens.
-    - **Exception — the invoices tab on the billing page** (October 2026): invoices live in Stripe, which only pages by cursor, so `BillingController@index` sends `Inertia::scroll()` over Cashier's `cursorPaginateInvoices()` (paid invoices only, config page size). It is the one cursor paginator in the app; database lists keep `paginate()`.
+    - **Exception — the invoices tab on the billing page** (October 2026): invoices live in Stripe, which only pages by cursor, so `BillingController@index` sends `Inertia::scroll()` over Cashier's `cursorPaginateInvoices()` (paid invoices only, config page size). Database lists keep `paginate()`, except the notes thread below.
+    - **Exception — the notes thread on the publish page** (owner decision 2026-11-12): `BuildPostNotesProps` sends `Inertia::scroll()` over `ListPostNotes::thread()`, a `cursorPaginate()` (cursor name `notes_cursor`, config page size, newest first with the id as tiebreaker) with `meta.total` added. Notes are created and deleted while a thread is open (by the user and, live, by teammates), and an offset page would then skip or repeat a note. The API and MCP note lists keep `paginate()` and their `page` / `meta.total` contract.
     - **This includes the public REST API** (`app/Http/Controllers/Api`). It used to pin its own page size of 15 as a stable contract; that exception is gone, so a list endpoint reads the same config as everything else. Changing `app.pagination.default` therefore changes the API's page size too — deliberate, and the reason a list response always carries `meta.per_page` for clients to read rather than assume.
 
 ## Changelog ("What's New")
@@ -982,6 +1002,15 @@ A controller serves **one resource**. Network-specific endpoints never pile up i
 - **MCP has no controllers**: one tool class per action (`app/Mcp/Tools/<Area>/<Verb><Resource>Tool.php`), never one tool that switches on the network.
 - Moving an endpoint between controllers keeps its URL and route name, so API clients see no change; the parity tests in `tests/Feature/Parity` must pass unchanged.
 
+## The current workspace is guaranteed by middleware
+
+Every app route that works on the current workspace sits behind `EnsureHasWorkspace` (`routes/app.php`), which redirects a user without one to `app.workspaces.create` before the controller runs (owner decision November 2026). A controller reads `$request->user()->currentWorkspace` and uses it; it never checks it again.
+
+- Never write `if (! $workspace) { return redirect()->route('app.workspaces.create'); }`, `abort_unless($workspace, ...)` or any other "no workspace" guard in a controller, a FormRequest or an action reached from those routes. The guard was copied into 27 controller actions and never ran; all of it was removed.
+- A new route that needs the current workspace goes inside the `EnsureHasWorkspace` group, never outside it with its own check. Its return type does not carry `|RedirectResponse` for that redirect.
+- A route that must work without a workspace (creating the first one, Welcome) stays outside the group and handles that case itself.
+- The redirect is covered once, for the middleware, by the tests that hit an app page without a workspace; a controller test does not repeat it.
+
 ## MCP tools list in one page
 
 `tools/list` returns every tool in a single response (owner decision October 2026): some MCP clients do not follow `nextCursor` and silently see only the first page. `TryPostServer` sets both `defaultPaginationLength` and `maxPaginationLength` to 200; laravel/mcp uses the smaller of the two, so raising only the default does nothing (the package's max is 50). The same page size applies to `resources/list`, `resources/templates/list` and `prompts/list`. Raise both before the server reaches 200 tools. A client may still ask for a smaller page (`per_page`, a laravel/mcp extension; the MCP spec only defines `cursor`) and follow `nextCursor`; a bigger request is capped at 200. `tests/Feature/Mcp/ToolListPaginationTest.php` calls the real endpoint and fails when the list is split.
@@ -1050,10 +1079,60 @@ an `enabled` flag or posts with several channels. Posts created together share
 - **Two status columns.** `posts.status` is the lifecycle (draft,
   pending_approval, scheduled, publishing, published, failed). `posts.publish_status`
   (`App\Enums\Post\PublishStatus`) is the network side (pending, publishing,
-  retrying, pending_review, published, failed, rejected). Publishers write
+  retrying, pending_review, published, failed, rejected, deleted). Publishers write
   `publish_status` through the `markPublication*()` methods; only
   `FinalizePostPublication` moves `status` to published or failed. There is no
   `partially_published`.
+- **Deleted on the network.** `publish_status = deleted` means the network
+  deleted a post it published; `status` stays published. Only a deletion the
+  collector confirms moves the post
+  (`AnalyticsCollectionException::deletedOnNetwork()`), always from the metrics
+  read it already makes. Where the network's "does not exist" answer could also
+  mean lost access, an account-level read (the list its discovery reads) must
+  still work (`readUnlessDeleted()`, `readsMissing()` and `stillReads()` on
+  `AbstractPublicationMetricsCollector`; a read that fails only for now is
+  rethrown so the job retries):
+    - YouTube: its own `videos.list` read no longer returns the video.
+    - Facebook, Instagram, Threads (`AbstractMetaPublicationMetricsCollector`):
+      code 100 / subcode 33 for the post, and the posts edge still reads; a
+      story is never checked (it expires). A Facebook Page post is checked on
+      its insights edge (`readPost()`): Graph answers its own node with #10,
+      which also means a missing permission.
+    - X: the documented `resource-not-found` problem naming the post, in the
+      `errors` of the lookup's 200 (single and batch alike, checked against a
+      real deleted post); no extra request (X bills each one).
+    - Bluesky: `getPosts` leaves it out, its repository answers
+      `RecordNotFound`, and `listRecords` still reads.
+    - Mastodon: 404 or 410 on an owner read only (without `read`, 404 also
+      means private), and the account's statuses still read.
+    - Pinterest: 404 or 410 on the Pin analytics and on the Pin, and the Pins
+      list still reads.
+
+  Any other 404 or 410 only marks the analytics publication. TikTok cannot tell
+  deleted from private; LinkedIn, Google Business, Telegram and Discord have no
+  read after publishing (#481).
+  `CollectPublicationMetrics` marks the post (`markPublicationDeleted()`) under
+  the publication's row lock, unless a sync saw the post since the second the
+  read started (`last_seen_at` at or after it; a sync earlier in that second
+  only delays the deletion to the next read);
+  a sync that sees it again restores it (`markPublicationRestored()`, which
+  does not rerun the "just published" side effects) and queues a fresh metrics
+  read so a stale discovery page cannot leave it published until the next day.
+  Marking it deleted sends `post.deleted_on_network`, and restoring it sends
+  `post.restored`, never for a post imported from the network, which sends no
+  webhook at all (`ImportExternalPosts`); both also broadcast
+  `post.platform.status.updated` so an open schedule reloads, imported or not. `Post::isDeletedOnNetwork()` is the rule:
+  `PostStatusRules::blocksDeletion()` lets such a post be deleted in TryPost, it
+  finalizes as published, and it still counts as published for the posting
+  goal, the lifecycle and PostHog (`PublishStatus::wentOut()`,
+  `Post::scopeWentOut()`), while live-only reads (Instagram grid, analytics
+  sync, the importer's matching, TikTok video ids) keep
+  `scopePublicationPublished()`.   On the post cards, the calendar chip and the details
+  dialog, `isDeletedOnNetwork()` and `postPermalink()`
+  (`lib/postNetwork.ts`) decide the badge and the link, and
+  `postDisplayStatus()` (`usePostStatus.ts`, shown by `PostStatusBadge`) the status shown; the repurpose
+  activity list labels `publish_status` directly. Insights keep the historical
+  numbers and drop the network link (`PublicationAvailability::visiblePermalink()`).
 - **Publication writes have their own clock.** `writePublication()` (and every
   `markPublication*()`) sets `publication_updated_at` and leaves `updated_at`
   alone, so a publish attempt never moves the post's `updated_at` (API, webhooks)
@@ -1190,11 +1269,14 @@ Browser tests live in `tests/Browser` and run on `pestphp/pest-plugin-browser` d
     - `waitFor($page, '@id')`: an element is mounted and laid out.
     - `waitForGone($page, '@id')`: no element matches.
     - `waitForState($page, '@id', "element.getAttribute('aria-checked') === 'true'")`: an element exists and the expression about `element` is true (attributes, `dataset`, `disabled`, position).
+    - `waitForOpen($page, '@post-composer-dialog')`: a dialog, sheet or popover is open (`data-state`, `open` by default) and done animating in.
     - `waitForText($page, '[role="option"]', 'general')`: any matching element contains the text.
+    - `waitForCount($page, '@composer-media-item', 2)`: that many elements match (`===`, or pass `'>='` / `'>'`).
     - `waitForGoneOrShown($page, gone: '@post-composer-dialog', shown: '@unsaved-changes-dialog')`: whichever happens first, so the assertion after it fails at once instead of waiting out the timeout.
     - `waitForPath($page, $path)`: the page is at that path.
     - `waitForCondition($page, $js)`: only for what is not about an element (`location.search`, a `window.__` spy).
-    - Never write `document.querySelector(...)` inside a wait, and never define a per-file `waitFor*` helper. Pest's `Webpage` is `final readonly` and not macroable, which is why these are global functions. Files that still have their own `waitFor*` helpers predate this rule; move them to the shared helpers when touching them (the sweep is tracked in #435). If a wait needs something the helpers cannot express, add a helper to `tests/Pest.php` instead of inlining it.
+    - Each wait gives up after 30 seconds; a slower one (an import that polls the server) passes `seconds:` to `waitFor`, `waitForGone`, `waitForState` or `waitForCondition`.
+    - Never write `document.querySelector(...)` inside a wait, and never define a per-file `waitFor*` helper. Pest's `Webpage` is `final readonly` and not macroable, which is why these are global functions. A helper with a domain name (`waitForComposerReady`) may wrap one condition, built on the shared helpers, never a polling loop of its own. If a wait needs something the helpers cannot express, add a helper to `tests/Pest.php` instead of inlining it.
 - **Never `sleep()` in a browser test.** The HTTP server that serves the page runs inside the same PHP process (an Amp loop that only ticks while Pest awaits Playwright), so a blocking `sleep()` starves every asset request: the page stays blank, the Vue app never mounts, and screenshots come out empty. The helpers above poll from the page with `$page->script(...)`, which keeps the loop running.
 - `BrowserTestCase` sets `$fakesVite = false` on purpose: these tests load real built assets, so faking Vite blanks the app.
 - End page assertions with `->assertNoJavaScriptErrors()`.
@@ -1251,6 +1333,7 @@ Whenever Laravel has a helper for something, use it instead of a native PHP func
     - Production code: `config('trypost.platforms.linkedin.oauth_api').'/oauth/v2/accessToken'`, never the literal URL.
     - Tests: use the same `config(...)` value in `Http::fake([...])` — `Http::fake([config('trypost.platforms.x.api').'/oauth2/token' => ...])`. Tests with hardcoded URLs drift silently when the config changes.
     - Path/route segments after the host (e.g. `/oauth/v2/accessToken`, `/xrpc/com.atproto.server.refreshSession`) are part of the provider's protocol spec — those stay inline next to the call. Only the host comes from config.
+    - Every such URL in `config/trypost.php` goes through its `$url(...)` closure, which drops a trailing slash, so a reader appends the path to `config(...)` and never trims or casts it (`ThirdPartyUrlConfigTest`). A new URL key uses `$url('ENV_NAME', 'https://…')`, not `env()`. A server stored on an account (`SocialAccount::bluesky_service`, `mastodon_instance`) is never trimmed either: Bluesky stores the config value and Mastodon trims the instance when it connects.
 
 ## Social Platform API Documentation (official sources)
 

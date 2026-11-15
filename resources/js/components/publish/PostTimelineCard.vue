@@ -4,7 +4,6 @@ import {
     IconArrowsMaximize,
     IconCircleDashedPlus,
     IconCirclePlay,
-    IconEdit,
     IconExternalLink,
     IconGhost2,
     IconMessageCircle,
@@ -18,28 +17,27 @@ import {
     IconPlayerPlayFilled,
     IconRepeat,
     IconSend,
-    IconX,
 } from '@tabler/icons-vue';
-import { type Component, computed, inject, ref, watch } from 'vue';
+import { type Component, computed, ref, watch } from 'vue';
 
-import { reject as rejectPostRoute } from '@/actions/App/Http/Controllers/App/PostApprovalController';
-import { edit as editPostRoute } from '@/actions/App/Http/Controllers/App/PostController';
 import ChannelAvatar from '@/components/ChannelAvatar.vue';
 import MediaLightbox from '@/components/media/MediaLightbox.vue';
 import PlatformBrandIcon from '@/components/PlatformBrandIcon.vue';
 import PostNotesPanel from '@/components/posts/editor/PostNotesPanel.vue';
 import PostScheduleModeBadge from '@/components/posts/PostScheduleModeBadge.vue';
 import AddToQueueButton from '@/components/publish/AddToQueueButton.vue';
-import ApprovePostButton from '@/components/publish/ApprovePostButton.vue';
+import PostApprovalActions from '@/components/publish/PostApprovalActions.vue';
 import PostCardLabels from '@/components/publish/PostCardLabels.vue';
 import PostCardMenu from '@/components/publish/PostCardMenu.vue';
 import PostCardThread from '@/components/publish/PostCardThread.vue';
+import PostDeletedOnNetworkPopover from '@/components/publish/PostDeletedOnNetworkPopover.vue';
 import PostDetailsDialog from '@/components/publish/PostDetailsDialog.vue';
 import PostFailurePopover from '@/components/publish/PostFailurePopover.vue';
 import PostMetricsBand from '@/components/publish/PostMetricsBand.vue';
 import PostPollResultsList from '@/components/publish/PostPollResultsList.vue';
 import PostRecurrenceDialog from '@/components/publish/PostRecurrenceDialog.vue';
 import PostRecurrenceSummary from '@/components/publish/PostRecurrenceSummary.vue';
+import PostStatusBadge from '@/components/publish/PostStatusBadge.vue';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -53,26 +51,19 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { usePostCardMenuActions } from '@/composables/publish/usePostCardMenuActions';
 import { useDisplayTimezone } from '@/composables/useDisplayTimezone';
 import {
     getContentTypeBadgeKey,
     getPlatformLabel,
 } from '@/composables/usePlatformLogo';
-import {
-    deletePostCardKey,
-    copyPostCardLink,
-    duplicatePostCard,
-    editPostCardUrlKey,
-    schedulePostCard,
-    sharePostCardLink,
-    toastFirstError,
-} from '@/composables/usePostCardActions';
-import { getPostStatusConfig } from '@/composables/usePostStatus';
 import { useWorkspaceAbilities } from '@/composables/useWorkspaceAbilities';
 import date from '@/date';
 import dayjs from '@/dayjs';
 import { blank, filled } from '@/lib/helpers';
 import { isImage, isVideo } from '@/lib/mediaType';
+import { postAttemptAt, postNoTimeKey } from '@/lib/postCard';
+import { isDeletedOnNetwork, postPermalink } from '@/lib/postNetwork';
 import { postThreadOf } from '@/lib/postThread';
 import { compactPublicationMetrics } from '@/lib/publicationMetrics';
 import { recurrenceRuleOf } from '@/lib/recurrence';
@@ -97,6 +88,7 @@ const props = withDefaults(
         post: PostCard;
         tab: PublishTab;
         displayTimezone: string;
+        canMoveToTop?: boolean;
         canMoveUp?: boolean;
         canMoveDown?: boolean;
         draggable?: boolean;
@@ -104,6 +96,7 @@ const props = withDefaults(
         movable?: boolean;
     }>(),
     {
+        canMoveToTop: false,
         canMoveUp: false,
         canMoveDown: false,
         draggable: false,
@@ -120,12 +113,7 @@ const emit = defineEmits<{
 const MAX_THUMBNAILS = 4;
 
 const page = usePage();
-const { canApprove, canCreatePost, canPublishDirectly } =
-    useWorkspaceAbilities();
-const deletePost = inject(deletePostCardKey, () => {});
-const editUrl = inject(editPostCardUrlKey, (post: PostCard) =>
-    editPostRoute.url(post.id),
-);
+const { canCreatePost, canPublishDirectly } = useWorkspaceAbilities();
 const { timezone, formatTime } = useDisplayTimezone(props.displayTimezone, []);
 
 watch(
@@ -147,9 +135,6 @@ const highlightNoteId = computed(() =>
 
 const platform = computed(() => props.post.platform ?? null);
 const account = computed(() => props.post.social_account ?? null);
-const recurrenceTimezone = computed(
-    () => account.value?.timezone ?? timezone.value,
-);
 
 const isPublishing = computed(
     () => props.post.status === PostStatus.Publishing,
@@ -161,16 +146,30 @@ const isInGoogleReview = computed(
         props.post.publish_status === PublishStatus.PendingReview,
 );
 
+/** How the post was timed: on Sent for every post (one imported from the network counts as custom), elsewhere only while it waits to go out. */
 const scheduleMode = computed(() => {
-    if (props.post.origin === PostOrigin.Network) {
-        return props.tab === 'sent' ? ScheduleMode.Custom : null;
+    const imported = props.post.origin === PostOrigin.Network;
+
+    if (props.tab === 'sent' && imported) {
+        return ScheduleMode.Custom;
     }
 
-    return props.tab === 'sent' ||
+    if (props.tab === 'sent') {
+        return props.post.schedule_mode;
+    }
+
+    if (imported) {
+        return null;
+    }
+
+    if (
         props.post.status === PostStatus.Scheduled ||
         props.post.status === PostStatus.PendingApproval
-        ? props.post.schedule_mode
-        : null;
+    ) {
+        return props.post.schedule_mode;
+    }
+
+    return null;
 });
 
 const showNotes = computed(() => !isPublishing.value);
@@ -185,8 +184,25 @@ watch(
 );
 
 watch(openPostNotesId, (id) => {
-    if (id === props.post.id) notesOpen.value = true;
+    notesOpen.value = id === props.post.id;
 });
+
+/**
+ * Opens or closes this post's notes: the page keeps one thread open (`?notes=`)
+ * and reloads only its props, so opening another post's notes closes this one.
+ */
+const setNotesOpen = (open: boolean): void => {
+    notesOpen.value = open;
+    router.reload({
+        data: {
+            notes: open ? props.post.id : undefined,
+            note: undefined,
+        },
+        only: ['openPostNotesId', 'highlightNoteId', 'postNotes'],
+        reset: ['postNotes'],
+        replace: true,
+    });
+};
 
 const setNoteCount = (count: number): void => {
     noteCount.value = count;
@@ -194,11 +210,7 @@ const setNoteCount = (count: number): void => {
 
 const time = computed(() => {
     if (props.tab === 'sent') {
-        return (
-            props.post.published_at ??
-            props.post.scheduled_at ??
-            props.post.created_at
-        );
+        return postAttemptAt(props.post);
     }
 
     return isPublishing.value
@@ -216,16 +228,7 @@ const isPending = computed(
     () => props.post.status === PostStatus.PendingApproval,
 );
 
-/** What a post without a time shows: the queue slot its approval request asks for, else "No time". */
-const noTimeKey = computed((): string => {
-    const slot = props.post.approval_queue_position;
-
-    if (isPending.value && slot) {
-        return `posts.publish.pending_slot.${slot}`;
-    }
-
-    return 'posts.publish.no_time';
-});
+const noTimeKey = computed(() => postNoTimeKey(props.post));
 
 const isEditable = computed(
     () =>
@@ -285,7 +288,9 @@ const contentTypeKey = computed(() =>
         : null,
 );
 
-const permalink = computed(() => props.post.platform_url ?? null);
+const deletedOnNetwork = computed(() => isDeletedOnNetwork(props.post));
+
+const permalink = computed(() => postPermalink(props.post));
 
 const metricsDetail = computed(() => {
     const detail = props.post.metrics ?? null;
@@ -329,43 +334,28 @@ const showStatus = computed(
 
 const hasFailure = computed(() => props.post.status === PostStatus.Failed);
 
-const APPROVAL_RELOAD = {
-    only: ['posts', 'counts', 'queue', 'hasData'],
-    reset: ['posts'],
-};
-
-const rejectPost = (): void => {
-    router.put(
-        rejectPostRoute.url(props.post.id),
-        {},
-        { ...APPROVAL_RELOAD, preserveScroll: true, onError: toastFirstError },
-    );
-};
-
-const revertRequest = (): void => {
-    schedulePostCard(props.post.id, 'draft', APPROVAL_RELOAD);
-};
-
 const recurrence = computed(() =>
     props.post.status === PostStatus.Scheduled && props.post.scheduled_at
         ? recurrenceRuleOf(props.post)
         : null,
 );
 
-const detailsOpen = ref(openPostDetailsId.value === props.post.id);
-
-const openDetails = (): void => {
-    detailsOpen.value = true;
-};
-
-const recurrenceOpen = ref(false);
+const {
+    detailsOpen,
+    recurrenceOpen,
+    recurrenceTarget,
+    recurrenceTimezone,
+    openDetails,
+    edit,
+    publishNow,
+    runPostAction,
+    runMenuAction,
+} = usePostCardMenuActions(() => props.post, {
+    timezone: () => timezone.value,
+    detailsOpen: openPostDetailsId.value === props.post.id,
+});
 
 watch(detailsOpen, (open) => emit('details', open));
-const recurrencePost = ref<PostCard>(props.post);
-
-const edit = (post: PostCard = props.post): void => {
-    router.visit(editUrl(post));
-};
 
 const open = (): void => {
     if (isEditable.value) {
@@ -375,36 +365,6 @@ const open = (): void => {
     }
 
     openDetails();
-};
-
-const runPostAction = (action: PostCardMenuAction, post: PostCard): void => {
-    switch (action) {
-        case 'publish_now':
-            schedulePostCard(post.id, 'publish_now');
-            break;
-        case 'duplicate':
-            duplicatePostCard(post);
-            break;
-        case 'recurrence':
-            recurrencePost.value = post;
-            recurrenceOpen.value = true;
-            break;
-        case 'move_drafts':
-            schedulePostCard(post.id, 'draft');
-            break;
-        case 'details':
-            detailsOpen.value = true;
-            break;
-        case 'share_link':
-            sharePostCardLink(post);
-            break;
-        case 'copy_link':
-            copyPostCardLink(post);
-            break;
-        case 'delete':
-            deletePost(post);
-            break;
-    }
 };
 
 const onMenuSelect = (action: PostCardMenuAction): void => {
@@ -419,11 +379,10 @@ const onMenuSelect = (action: PostCardMenuAction): void => {
             emit('move', 'down');
             break;
         default:
-            runPostAction(action, props.post);
+            runMenuAction(action);
     }
 };
 
-defineExpose({ openDetails });
 </script>
 
 <template>
@@ -464,15 +423,11 @@ defineExpose({ openDetails });
                     {{ $t(noTimeKey) }}
                 </span>
             </span>
-            <Badge
+            <PostStatusBadge
                 v-if="showsApprovalBadge"
-                variant="warning"
-                class="h-6 gap-1 px-2 [&>svg]:size-4"
+                status="pending_approval"
                 :data-testid="`post-approval-badge-${post.id}`"
-            >
-                <IconEdit />
-                {{ $t('posts.approvals.badge') }}
-            </Badge>
+            />
             <span
                 v-if="timePassed"
                 class="text-xs text-destructive-text"
@@ -494,6 +449,11 @@ defineExpose({ openDetails });
                 :mode="scheduleMode"
                 plain
             />
+            <PostDeletedOnNetworkPopover
+                v-if="deletedOnNetwork"
+                :post="post"
+                :test-key="post.id"
+            />
             <PostFailurePopover
                 v-if="showStatus && hasFailure"
                 :post="post"
@@ -501,21 +461,14 @@ defineExpose({ openDetails });
                 :attempted-at="time"
                 :timezone="timezone"
             />
-            <Badge
+            <PostStatusBadge
                 v-else-if="showStatus && !isPublishing"
-                :variant="getPostStatusConfig(post.status).variant"
-                class="h-6 gap-1 px-2 [&>svg]:size-4"
+                :status="post.status"
                 :data-testid="`post-status-${post.id}`"
-            >
-                <component
-                    :is="getPostStatusConfig(post.status).icon"
-                    :class="getPostStatusConfig(post.status).iconClass"
-                />
-                {{ $t(`posts.status.${post.status}`) }}
-            </Badge>
+            />
         </div>
 
-        <Collapsible v-model:open="notesOpen" as-child>
+        <Collapsible :open="notesOpen" as-child @update:open="setNotesOpen">
             <article
                 class="min-w-0 overflow-hidden rounded-xl border border-border-strong bg-card"
             >
@@ -839,27 +792,11 @@ defineExpose({ openDetails });
                                 }}
                             </TooltipContent>
                         </Tooltip>
-                        <template v-if="isPending && canApprove">
-                            <ApprovePostButton :post="post" :test-key="post.id" />
-                            <Button
-                                variant="outline"
-                                class="text-destructive-text"
-                                :data-testid="`post-reject-${post.id}`"
-                                @click="rejectPost"
-                            >
-                                <IconX class="size-4" />
-                                {{ $t('posts.approvals.reject') }}
-                            </Button>
-                        </template>
-                        <Button
-                            v-else-if="isPending"
-                            variant="outline"
-                            :data-testid="`post-revert-${post.id}`"
-                            @click="revertRequest"
-                        >
-                            <IconX class="size-4" />
-                            {{ $t('posts.approvals.revert') }}
-                        </Button>
+                        <PostApprovalActions
+                            v-if="isPending"
+                            :post="post"
+                            :test-key="post.id"
+                        />
                         <AddToQueueButton
                             v-if="canCreatePost && tab === 'drafts' && account"
                             :post="post"
@@ -895,7 +832,7 @@ defineExpose({ openDetails });
                             v-if="canPublishDirectly && post.status === PostStatus.Scheduled"
                             variant="outline"
                             :data-testid="`post-publish-now-${post.id}`"
-                            @click="schedulePostCard(post.id, 'publish_now')"
+                            @click="publishNow"
                         >
                             <IconSend class="size-4" />
                             {{ $t('posts.publish.actions.publish_now') }}
@@ -920,6 +857,7 @@ defineExpose({ openDetails });
                             v-if="canCreatePost && !isPublishing"
                             :post="post"
                             :test-key="post.id"
+                            :can-move-to-top="canMoveToTop"
                             :can-move-up="canMoveUp"
                             :can-move-down="canMoveDown"
                             :movable="movable"
@@ -937,9 +875,7 @@ defineExpose({ openDetails });
                         <PostRecurrenceDialog
                             v-if="canCreatePost"
                             v-model:open="recurrenceOpen"
-                            :post="
-                                recurrencePost.id === post.id ? post : recurrencePost
-                            "
+                            :post="recurrenceTarget"
                             :test-key="post.id"
                             :timezone="recurrenceTimezone"
                         />
