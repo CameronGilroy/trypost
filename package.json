@@ -73,6 +73,15 @@
         "vue-input-otp": "^0.3.2",
         "vue-sonner": "^2.0.9"
     },
+    "overrides": {
+        "@vue/language-core": {
+            "minimatch": "11.0.8"
+        },
+        "@typescript-eslint/typescript-estree": {
+            "minimatch": "11.0.8"
+        },
+        "postcss-selector-parser": "6.1.6"
+    },
     "optionalDependencies": {
         "@rollup/rollup-linux-x64-gnu": "4.9.5",
         "@rollup/rollup-win32-x64-msvc": "4.9.5",
